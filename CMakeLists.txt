@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 project(craftstudio2entity_cpp)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 # Typically you don't care so much for a third party library's tests to be
 # run from your own project's code.

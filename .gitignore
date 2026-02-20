@@ -8,3 +8,11 @@ bin/
 CMakeCache.txt
 Makefile
 out.json
+*.tlog
+*.recipe
+*.log
+/craftstudio2entity.dir/Debug
+*.filters
+*.sln
+*.vcxproj
+/x64

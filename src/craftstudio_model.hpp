@@ -51,19 +51,22 @@ public:
     const std::string name;
     const Vec3<double> position;
     const Vec3<double> offsetFromPivot;
-    const Vec3<int> size;
+    const Vec3<double> size;
+    const Vec3<double> stretch;
     const Vec3<double> rotation;
     const Vec2i texOffset;
 
     CraftStudioBlock(std::string name,
                      const Vec3<double> &position,
                      const Vec3<double> &offsetFromPivot,
-                     const Vec3<int> &size,
+                     const Vec3<double> &size,
+                     const Vec3<double> &stretch,
                      const Vec3<double> &rotation,
                      const Vec2i &texOffset) : name{std::move(name)},
                                                position{position},
                                                offsetFromPivot{offsetFromPivot},
                                                size{size},
+                                               stretch{stretch},
                                                rotation{rotation},
                                                texOffset{texOffset} {
     }

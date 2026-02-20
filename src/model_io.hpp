@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iomanip>
 #include <ios>
+#include <cmath>
 
 #include "nlohmann/json.hpp"
 #include "io_util.hpp"
@@ -18,7 +19,7 @@
 
 using nlohmann::json;
 
-#define FORMAT_VERSION "1.8.0"
+#define FORMAT_VERSION "1.12.0"
 
 // IN
 
@@ -43,20 +44,40 @@ CraftStudioBlock block_from_json(const json &root) {
     const std::string &name = root["name"];
     Vec3<double> position = vec3_from_json<double>(root["position"]);
     Vec3<double> offsetFromPivot = vec3_from_json<double>(root["offsetFromPivot"]);
-    Vec3<int> size = vec3_from_json<int>(root["size"]);
+    Vec3<double> size = vec3_from_json<double>(root["size"]);
     Vec3<double> rotation = vec3_from_json<double>(root["rotation"]);
     Vec2i texOffset = vec2i_from_json(root["texOffset"]);
+    Vec3<double> stretch{1.0, 1.0, 1.0};
+
+    if (root.contains("vertexCoords")) {
+        const json &array = root["vertexCoords"];
+        if (array.is_array()) {
+            auto get_vertex = [&](int index) -> Vec3<double> {
+                const json &v = array[index];
+                return {v[0], v[1], v[2]};
+            };
+            
+            Vec3<double> v3 = get_vertex(3);
+            Vec3<double> v2 = get_vertex(2);
+            Vec3<double> v0 = get_vertex(0);
+            Vec3<double> v6 = get_vertex(6);
+
+            double stretchX = size.x != 0.0 ? std::abs(v2.x - v3.x) / size.x : 1.0;
+            double stretchY = size.y != 0.0 ? std::abs(v0.y - v3.y) / size.y : 1.0;
+            double stretchZ = size.z != 0.0 ? std::abs(v6.z - v3.z) / size.z : 1.0;
+            stretch = {stretchX, stretchY, stretchZ};
+        }
+    }
 
     json json_children = root["children"];
-    CraftStudioBlock block{name, position, offsetFromPivot, size, rotation, texOffset};
+    CraftStudioBlock block{name, position, offsetFromPivot, size, stretch, rotation, texOffset};
 
     for (const json &json_child : json_children) {
         CraftStudioBlock child = block_from_json(json_child);
         block.push_child(child);
     }
 
-    if (root.contains("vertexCoords"))
-        std::cout << "WARNING: Cube \"" + name + "\" has stretch which must be ignored." << std::endl;
+
 
     return block;
 }
@@ -113,6 +134,10 @@ json bone_to_json(const BedrockEntityBone &bone) {
         root["rotation"] = vec3_to_json(*bone.rotation);
     }
 
+    if (bone.has_scale()) {
+        root["scale"] = vec3_to_json(*bone.scale);
+    }
+
     json jsonCubes = json::array();
 
     for (const BedrockEntityCube &cube : bone.get_cubes())
@@ -122,18 +147,22 @@ json bone_to_json(const BedrockEntityBone &bone) {
     return root;
 }
 
-json geometry_to_json(const BedrockEntityGeometry &geometry) {
+json geometry_to_json(const std::string &identifier, const BedrockEntityGeometry &geometry) {
     json root = json::object();
+    json description = json::object();
 
-    const Vec2i &visible_bounds = geometry.visible_bounds;
-    root["visible_bounds_width"] = visible_bounds.x;
-    root["visible_bounds_height"] = visible_bounds.y;
-
-    root["visible_bounds_offset"] = vec3_to_json(geometry.visible_bounds_offset);
+    description["identifier"] = identifier;
 
     const Vec2i &texture_size = geometry.texture_size;
-    root["texturewidth"] = texture_size.x;
-    root["textureheight"] = texture_size.y;
+    description["texture_width"] = texture_size.x;
+    description["texture_height"] = texture_size.y;
+
+    const Vec2i &visible_bounds = geometry.visible_bounds;
+    description["visible_bounds_width"] = visible_bounds.x;
+    description["visible_bounds_height"] = visible_bounds.y;
+    description["visible_bounds_offset"] = vec3_to_json(geometry.visible_bounds_offset);
+
+    root["description"] = description;
 
     json json_bones = json::array();
     for (const BedrockEntityBone &bone : geometry.get_bones())
@@ -147,9 +176,15 @@ json model_to_json(const BedrockEntityModel &model) {
     json root = json::object();
     root["format_version"] = FORMAT_VERSION;
 
+    json geometries = json::array();
     for (const auto &entry : model.get_geometries()) {
-        root[entry.first] = geometry_to_json(*entry.second);
+        std::string identifier = entry.first;
+        if (identifier.find("geometry.") == std::string::npos) {
+             identifier = "geometry." + identifier;
+        }
+        geometries.push_back(geometry_to_json(identifier, *entry.second));
     }
+    root["minecraft:geometry"] = geometries;
 
     return root;
 }

@@ -13,12 +13,12 @@ static constexpr Vec2i VISIBLE_BOUNDS{1, 2};
 static const Vec3<double> VISIBLE_BOUNDS_OFFSET{0, 0, 0};
 static constexpr Vec2i TEXTURE_SIZE{128, 128};
 
-BedrockEntityCube blockToCube(const CraftStudioBlock &block, const CraftStudioBlock *parent) {
-    const Vec3<int> &size = block.size;
-    Vec3<double> position = block.position + block.offsetFromPivot;
+BedrockEntityCube blockToCube(const CraftStudioBlock &block, Vec3<double> globalPos) {
+    const Vec3<double> &size = block.size;
+    // globalPos is the position of the block's PIVOT/Rotation Point in world space.
+    // Cube origin is derived from this + offsetFromPivot.
 
-    if (parent != nullptr)
-        position = position + parent->position + parent->offsetFromPivot;
+    Vec3<double> position = globalPos + block.offsetFromPivot;
 
     position = {
             position.x - size.x / 2.0,
@@ -32,41 +32,38 @@ BedrockEntityCube blockToCube(const CraftStudioBlock &block, const CraftStudioBl
 /**
  * Converts a {@link CraftStudioBlock} to a {@link BedrockEntityBone} and adds the bone to the given
  * {@link BedrockEntityGeometry}.
- * <p>
- * If the given block has a parent, the parent will be referenced by the block in the geometry.
- * <p>
- * If the given block has children, these children will be appended, referencing the given block as a parent.
  *
  * @param geometry the entity geometry
  * @param block the block to be converted
- * @param parent the parent of the block, can be {@code null}
+ * @param parentName the name of the parent, can be {@code nullptr}
+ * @param parentGlobalPos the accumulated global position of the parent
  */
 void blockToBone(BedrockEntityGeometry &geometry,
                  const CraftStudioBlock &block,
-                 const CraftStudioBlock *parent) {
-    const std::string *parentName = parent == nullptr ? nullptr : &parent->name;
+                 const std::string *parentName,
+                 Vec3<double> parentGlobalPos) {
 
-    auto *const pivot = new Vec3<double>{};
+    Vec3<double> currentGlobalPos = parentGlobalPos + block.position;
 
-    *pivot = block.position;
-    if (parent != nullptr)
-        *pivot = *pivot + parent->position;
+    auto *const pivot = new Vec3<double>{currentGlobalPos};
     pivot->z = -pivot->z;
 
     auto *const rotation = new Vec3<double>{};
     *rotation = craftstudio_rot_to_entity_rot(block.rotation);
 
-    BedrockEntityBone bone{block.name, parentName, pivot, rotation};
-    bone.push_cube(blockToCube(block, parent));
-
-    for (const CraftStudioBlock &child : block.get_children()) {
-        if (is_zero_rotation(child.rotation))
-            bone.push_cube(blockToCube(child, &block));
-        else
-            blockToBone(geometry, child, &block);
+    Vec3<double> *scale = nullptr;
+    if (block.stretch.x != 1.0 || block.stretch.y != 1.0 || block.stretch.z != 1.0) {
+        scale = new Vec3<double>{block.stretch};
     }
 
+    BedrockEntityBone bone{block.name, parentName, pivot, rotation, scale};
+    bone.push_cube(blockToCube(block, currentGlobalPos));
+
     geometry.push_bone(std::move(bone));
+
+    for (const CraftStudioBlock &child : block.get_children()) {
+        blockToBone(geometry, child, &block.name, currentGlobalPos);
+    }
 }
 
 
@@ -79,7 +76,7 @@ BedrockEntityModel convert(const CraftStudioModel &csModel) {
     };
 
     for (const CraftStudioBlock &block : csModel.get_blocks())
-        blockToBone(*geometry, block, nullptr);
+        blockToBone(*geometry, block, nullptr, {0, 0, 0});
 
     result.insert(csModel.title, geometry);
     return result;
@@ -122,8 +119,8 @@ int main(int argc, const char **argv) {
     std::ofstream entityFile{entityPath};
 
     std::set<char> flags{};
-    if (argc > 2)
-        for (char c : std::string{argv[2]})
+    if (argc > 3)
+        for (char c : std::string{argv[3]})
             flags.insert(c);
 
     if (!csFile.good())

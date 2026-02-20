@@ -26,7 +26,7 @@ class BedrockEntityCube;
 
 struct BedrockEntityCube {
     Vec3<double> origin;
-    Vec3<int> size;
+    Vec3<double> size;
     Vec2i uv;
 };
 
@@ -40,6 +40,7 @@ public:
     const std::string *parent;
     const Vec3<double> *pivot;
     const Vec3<double> *rotation;
+    const Vec3<double> *scale;
 
     /**
      * Constructs a new bone.
@@ -55,20 +56,24 @@ public:
     BedrockEntityBone(std::string name,
                       const std::string *parent,
                       Vec3<double> *pivot,
-                      Vec3<double> *rotation) :
+                      Vec3<double> *rotation,
+                      Vec3<double> *scale) :
             name{std::move(name)},
             parent{parent},
             pivot{pivot},
-            rotation{rotation} {}
+            rotation{rotation},
+            scale{scale} {}
 
     BedrockEntityBone(BedrockEntityBone &&other) noexcept :
             cubes{std::move(other.cubes)},
             name{other.name},
             parent{other.parent},
             pivot{other.pivot},
-            rotation{other.rotation} {
+            rotation{other.rotation},
+            scale{other.scale} {
         other.pivot = nullptr;
         other.rotation = nullptr;
+        other.scale = nullptr;
     };
 
     BedrockEntityBone(BedrockEntityBone &bone) = delete;
@@ -76,6 +81,7 @@ public:
     ~BedrockEntityBone() {
         delete pivot;
         delete rotation;
+        delete scale;
     }
 
     bool has_parent() const {
@@ -88,6 +94,10 @@ public:
 
     bool has_rotation() const {
         return rotation != nullptr;
+    }
+
+    bool has_scale() const {
+        return scale != nullptr;
     }
 
     void push_cube(const BedrockEntityCube &cube) {
