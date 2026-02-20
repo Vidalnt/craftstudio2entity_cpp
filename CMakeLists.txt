@@ -23,6 +23,8 @@ add_executable(craftstudio2entity
         src/main.cpp
         src/math_util.cpp
         src/math_util.hpp
+        src/animation_converter.cpp
+        src/animation_converter.hpp
         src/bedrock_model.hpp
         src/craftstudio_model.hpp
         src/io_util.hpp
