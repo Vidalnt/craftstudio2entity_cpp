@@ -3,12 +3,16 @@
 #include <fstream>
 #include <set>
 #include <chrono>
+#include <filesystem>
+#include <functional>
 
 #include "math_util.hpp"
 #include "bedrock_model.hpp"
 #include "craftstudio_model.hpp"
 #include "model_io.hpp"
 #include "animation_converter.hpp"
+
+namespace fs = std::filesystem;
 
 static constexpr Vec2i VISIBLE_BOUNDS{1, 2};
 static const Vec3<double> VISIBLE_BOUNDS_OFFSET{0, 0, 0};
@@ -156,110 +160,215 @@ long current_time_millis() {
     ).count();
 }
 
+// ─── Single-file helpers ────────────────────────────────────────────────────
+
+/**
+ * Detects if a file is a CraftStudio animation (.csjsmodelanim) by reading
+ * its JSON content and checking for the "nodeAnimations" key.
+ * Returns false for .csjsmodel (geometry) files.
+ */
+bool detect_is_animation(const std::string &path) {
+    std::ifstream test(path);
+    if (!test.good()) return false;
+    json testJson;
+    if (test >> testJson && testJson.contains("nodeAnimations"))
+        return true;
+    return false;
+}
+
+/**
+ * Converts a single .csjsmodel file and writes the Bedrock geometry JSON.
+ * Returns true on success.
+ */
+bool convert_model_file(const std::string &inPath,
+                        const std::string &outPath,
+                        const std::set<char> &flags) {
+    if (file_exists(outPath.c_str()) && !flags.count('r')) {
+        std::cerr << "SKIP (exists): " << outPath << std::endl;
+        return false;
+    }
+    std::ifstream csFile(inPath);
+    if (!csFile.good()) {
+        std::cerr << "ERROR: Cannot open " << inPath << std::endl;
+        return false;
+    }
+    try {
+        CraftStudioModel csModel = read_model(csFile);
+        csFile.close();
+        BedrockEntityModel entityModel = convert(csModel);
+        // Ensure output directory exists
+        fs::create_directories(fs::path(outPath).parent_path());
+        std::ofstream entityFile(outPath);
+        if (!entityFile.good()) {
+            std::cerr << "ERROR: Cannot write " << outPath << std::endl;
+            return false;
+        }
+        write_model(entityModel, entityFile);
+        entityFile.close();
+        std::cerr << "  [model] " << inPath << "\n         -> " << outPath << std::endl;
+        return true;
+    } catch (const std::exception &e) {
+        std::cerr << "ERROR converting model " << inPath << ": " << e.what() << std::endl;
+        return false;
+    }
+}
+
+/**
+ * Converts a single .csjsanim file and writes the Bedrock animation JSON.
+ * Returns true on success.
+ */
+bool convert_anim_file(const std::string &inPath,
+                       const std::string &outPath,
+                       const std::set<char> &flags) {
+    if (file_exists(outPath.c_str()) && !flags.count('r')) {
+        std::cerr << "SKIP (exists): " << outPath << std::endl;
+        return false;
+    }
+    std::ifstream inFile(inPath);
+    if (!inFile.good()) {
+        std::cerr << "ERROR: Cannot open " << inPath << std::endl;
+        return false;
+    }
+    try {
+        json csJson;
+        inFile >> csJson;
+        inFile.close();
+
+        auto csAnim = AnimationConverter::parseCsJson(csJson);
+
+        // Derive model name from stem of output filename
+        std::string modelName = fs::path(outPath).stem().string();
+        if (modelName.empty()) modelName = "model";
+
+        auto bedrockAnim = AnimationConverter::convert(csAnim, modelName);
+        bedrock::File file;
+        file.animations[bedrockAnim.identifier] = bedrockAnim;
+
+        // Ensure output directory exists
+        fs::create_directories(fs::path(outPath).parent_path());
+        std::ofstream outFile(outPath);
+        if (!outFile.good()) {
+            std::cerr << "ERROR: Cannot write " << outPath << std::endl;
+            return false;
+        }
+        auto outJson = AnimationConverter::toJson(file);
+        outFile << std::setw(4) << outJson << std::endl;
+        outFile.close();
+        std::cerr << "  [anim]  " << inPath << "\n         -> " << outPath << std::endl;
+        return true;
+    } catch (const std::exception &e) {
+        std::cerr << "ERROR converting animation " << inPath << ": " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// ─── main ───────────────────────────────────────────────────────────────────
+
 int main(int argc, const char **argv) {
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <input> <output> [flags]" << std::endl;
-        std::cerr << "  input:  .csjsmodel (model) or .csjsanim (animation)" << std::endl;
-        std::cerr << "  output: .json (entity geometry or animation)" << std::endl;
-        std::cerr << "  flags:  r=replace, v=verbose" << std::endl;
+        std::cerr << std::endl;
+        std::cerr << "Single-file mode:" << std::endl;
+        std::cerr << "  input:  path to a .csjsmodel (geometry) or .csjsmodelanim (animation) file" << std::endl;
+        std::cerr << "  output: path to the destination .json file" << std::endl;
+        std::cerr << std::endl;
+        std::cerr << "Folder (batch) mode:" << std::endl;
+        std::cerr << "  input:  path to a folder containing .csjsmodel / .csjsmodelanim files" << std::endl;
+        std::cerr << "  output: destination pattern, e.g.  D:\\out\\anims\\*.json" << std::endl;
+        std::cerr << "          The '*' is replaced by each source file's stem." << std::endl;
+        std::cerr << std::endl;
+        std::cerr << "  flags:  r=replace existing files, v=verbose" << std::endl;
         return 1;
     }
 
-    std::string inPath = argv[1];
+    std::string inPath  = argv[1];
     std::string outPath = argv[2];
-
-    // Detect type by extension or content
-    bool isAnimation = inPath.find(".csjsanim") != std::string::npos;
-
-    if (!isAnimation) {
-        // Verify content if extension is not clear
-        std::ifstream test(inPath);
-        json testJson;
-        if (test >> testJson && testJson.contains("nodeAnimations")) {
-            isAnimation = true;
-        }
-        test.close();
-    }
 
     std::set<char> flags{};
     if (argc > 3)
         for (char c : std::string{argv[3]})
             flags.insert(c);
 
+    // ── FOLDER / BATCH MODE ──────────────────────────────────────────────────
+    if (fs::is_directory(inPath)) {
+        // Parse the output pattern: must contain '*'
+        // e.g. D:\Programs\example\anims\*.json
+        size_t starPos = outPath.find('*');
+        if (starPos == std::string::npos) {
+            return exit_with_err(
+                "When input is a folder the output must be a pattern like: "
+                "D:\\path\\to\\out\\*.json");
+        }
+
+        std::string outDir    = outPath.substr(0, starPos);        // "D:\path\to\out\"
+        std::string outExt    = outPath.substr(starPos + 1);       // ".json"
+
+        // Remove trailing slash from outDir (we'll join with stem below)
+        while (!outDir.empty() && (outDir.back() == '/' || outDir.back() == '\\'))
+            outDir.pop_back();
+
+        if (!fs::exists(outDir)) {
+            std::error_code ec;
+            fs::create_directories(outDir, ec);
+            if (ec) return exit_with_err("Cannot create output directory: " + outDir);
+        }
+
+        int converted = 0, errors = 0;
+        long time = current_time_millis();
+
+        for (const auto &entry : fs::recursive_directory_iterator(inPath)) {
+            if (!entry.is_regular_file()) continue;
+
+            const fs::path srcPath  = entry.path();
+            const std::string ext   = srcPath.extension().string();
+            const std::string stem  = srcPath.stem().string();
+
+            // Accept only .csjsmodel (geometry) and .csjsmodelanim (animation)
+            bool isModel = (ext == ".csjsmodel");
+            bool isAnim  = (ext == ".csjsmodelanim");
+
+            if (!isModel && !isAnim)
+                continue; // skip unrecognised extensions
+
+            std::string destPath = outDir + "\\" + stem + outExt;
+
+            bool ok = false;
+            if (isAnim)
+                ok = convert_anim_file(srcPath.string(), destPath, flags);
+            else
+                ok = convert_model_file(srcPath.string(), destPath, flags);
+
+            if (ok) ++converted; else ++errors;
+        }
+
+        time = current_time_millis() - time;
+        std::cerr << "\nBatch done in " << time << " ms: "
+                  << converted << " converted, "
+                  << errors    << " errors." << std::endl;
+        return errors > 0 ? 1 : 0;
+    }
+
+    // ── SINGLE FILE MODE ─────────────────────────────────────────────────────
+    if (!fs::exists(inPath))
+        return exit_with_err(inPath + " does not exist!");
+
+    bool isAnimation = detect_is_animation(inPath);
+
     if (file_exists(outPath.c_str()) && !flags.count('r'))
         exit_with_err(outPath + " already exists!");
 
+    long time = current_time_millis();
+
     if (isAnimation) {
-        std::ifstream inFile(inPath);
-        if (!inFile.good()) {
-            return exit_with_err("Cannot open input file: " + inPath);
-        }
-
-        json csJson;
-        inFile >> csJson;
-        inFile.close();
-
-        try {
-            auto csAnim = AnimationConverter::parseCsJson(csJson);
-            std::cerr << "Animation loaded: " << csAnim.title
-                      << " (" << csAnim.duration << " frames)" << std::endl;
-
-            // Extract model name from output or use default
-            std::string modelName = "model";
-            size_t lastSlash = outPath.find_last_of("/\\");
-            if (lastSlash != std::string::npos) {
-                modelName = outPath.substr(lastSlash + 1);
-                size_t dot = modelName.find('.');
-                if (dot != std::string::npos) {
-                    modelName = modelName.substr(0, dot);
-                }
-            }
-
-            auto bedrockAnim = AnimationConverter::convert(csAnim, modelName);
-            bedrock::File file;
-            file.animations[bedrockAnim.identifier] = bedrockAnim;
-
-            std::ofstream outFile(outPath);
-            if (!outFile.good()) {
-                return exit_with_err("Cannot open output file: " + outPath);
-            }
-
-            auto outJson = AnimationConverter::toJson(file);
-            outFile << std::setw(4) << outJson << std::endl;
-            outFile.close();
-
-            std::cerr << "Animation converted successfully!" << std::endl;
-            std::cerr << "  Length: " << bedrockAnim.animation_length << "s" << std::endl;
-            std::cerr << "  Loop: " << (bedrockAnim.loop ? "yes" : "no") << std::endl;
-            std::cerr << "  Bones: " << bedrockAnim.bones.size() << std::endl;
-
-        } catch (const std::exception& e) {
-            return exit_with_err(std::string("Animation conversion failed: ") + e.what());
-        }
-
+        if (!convert_anim_file(inPath, outPath, flags))
+            return 1;
     } else {
-        if (!std::ifstream(inPath).good())
-            exit_with_err(inPath + " must be a file!");
-
-        long time = current_time_millis();
-        {
-             std::ifstream csFile(inPath);
-             CraftStudioModel csModel = read_model(csFile);
-             csFile.close();
-             std::cerr << "CraftStudio model loaded." << std::endl;
-
-             BedrockEntityModel entityModel = convert(csModel);
-             std::cerr << "Model converted to Bedrock entity." << std::endl;
-
-             std::ofstream entityFile(outPath);
-             write_model(entityModel, entityFile);
-             entityFile.close();
-             std::cerr << "Bedrock entity model written." << std::endl;
-        }
-        time = current_time_millis() - time;
-
-        std::cerr << "Done! (" << time << " ms)" << std::endl;
+        if (!convert_model_file(inPath, outPath, flags))
+            return 1;
     }
 
+    time = current_time_millis() - time;
+    std::cerr << "Done! (" << time << " ms)" << std::endl;
     return 0;
 }
+

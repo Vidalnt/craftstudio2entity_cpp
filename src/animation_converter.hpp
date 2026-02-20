@@ -79,7 +79,7 @@ struct File {
 
 class AnimationConverter {
 public:
-    static constexpr double CS_FPS = 30.0;
+    static constexpr double CS_FPS = 60.0;
 
     /**
      * Converts a CraftStudio animation to Bedrock format
